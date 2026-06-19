@@ -1,0 +1,57 @@
+---
+title: "Nauplii_Plastic_Assays"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: installing-packages
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(janitor)
+```
+
+```{r}
+#| label: loading-data
+
+nauplii_plastic_raw <- read_csv("Data/Nauplii_Plastic_Data.csv")
+nauplii_plastic <- clean_names(nauplii_plastic_raw)
+
+```
+
+```{r}
+#| label: aged-ps
+
+nauplii_plastic |>
+  filter(treatment == "Aged PS") |>
+  ggplot(aes(x = factor(concentration_mg_m_l), y = percent_mortality, fill = factor(concentration_mg_m_l))) +
+  geom_col()
+
+```
+
+```{r}
+aged_summary <- nauplii_plastic |>
+  filter(treatment == "Aged PS") |>
+  group_by(concentration_mg_m_l) |>
+  summarise(
+    mean_mortality = mean(percent_mortality, na.rm = TRUE),
+    sd_mortality = sd(percent_mortality, na.rm = TRUE),
+    n = n(),
+    se_mortality = sd_mortality / sqrt(n)
+  )
+
+ggplot(aged_summary, aes(x = factor(concentration_mg_m_l), y = mean_mortality, fill = concentration_mg_m_l)) +
+  geom_col() +
+  geom_errorbar(
+    aes(ymin = mean_mortality - sd_mortality,
+        ymax = mean_mortality + sd_mortality),
+    width = 0.2
+  ) +
+  labs(
+    x = "Concentration",
+    y = "% Mortality",
+    title = "Aged PS Mean Mortality ± SD"
+  ) +
+  theme_minimal()
+```
