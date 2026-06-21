@@ -1,0 +1,352 @@
+---
+title: "Nauplii_Plastic_Assays"
+format: html
+editor: visual
+---
+
+```{r}
+#| label: installing-packages
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(janitor)
+library(colorRamps)
+library(drc)
+library(ggpubr)
+```
+
+```{r}
+#adding volume information and subsetting data
+
+##pulling in new csv where volume column has been added
+nauplii_plastic_raw2 <- read_csv("Data/plastic_data2.csv")
+data_plastic2 <- clean_names(nauplii_plastic_raw2)
+
+##defining volume and treatment columns as categorical data
+data_plastic2$volume_m_l<- as.factor(data_plastic2$volume_m_l)
+data_plastic2$treatment<- as.factor(data_plastic2$treatment)
+
+##subset 3mL vol
+data_plastic3mL <- subset(data_plastic2, volume_m_l == "3")
+ 
+##subset 4mL vol
+data_plastic4mL <- subset(data_plastic2, volume_m_l == "4")
+
+
+```
+
+```{r}
+### Running 3mL data only ###
+# 1. Summarize and clean up the concentration labels
+nauplii_summary3mL <- data_plastic3mL |>
+  mutate(concentration_clean = factor(round(concentration_mg_m_l_avg, 2))) |> 
+  group_by(treatment, concentration_clean) |>
+  summarise(
+    mean_mortality = mean(percent_mortality, na.rm = TRUE),
+    se_mortality = sd(percent_mortality, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+# 2. Plot with free x-axes per panel
+ggplot(nauplii_summary3mL, aes(x = concentration_clean, y = mean_mortality, fill = treatment)) +
+  geom_col(show.legend = FALSE, width = 0.7, color = "black", linewidth = 0.2) +  
+  geom_errorbar(
+    aes(ymin = mean_mortality - se_mortality, ymax = mean_mortality + se_mortality),
+    width = 0.2, color = "black"
+  ) +
+  # CRITICAL FIX: scales = "free_x" drops the unused empty bars
+  facet_wrap(~ treatment, scales = "free_x") + 
+  labs(
+    x = "Concentration (µg/mL)",
+    y = "% Mortality",
+    title = "Nauplii Mortality across Plastic Treatments"
+  ) +
+  # Using your custom palette color palette smoothly per panel
+  scale_fill_manual(values = c("Aged PS" = "#6BB389", "PS" = "#4D95BC", "Pure PS" = "#3276EC")) + 
+  theme_bw() + # Using theme_bw() provides clean borders around each facet panel
+  coord_cartesian(ylim = c(0, 100)) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+    strip.text = element_text(face = "bold", size = 11), # Makes panel headers bold
+    panel.grid.major.x = element_blank() # Removes vertical gridlines for a cleaner look
+  )
+
+```
+
+```{r}
+##probit analysis with the control
+
+#| label: true-probit-scatterplot
+#| fig-width: 11
+#| fig-height: 5.0
+
+# 1. Apply true Probit and Log10 transformations
+nauplii_transformed <- data_plastic3mL |>
+  mutate(conc_adjusted = if_else(concentration_mg_m_l_avg == 0, 0.01, concentration_mg_m_l_avg)) |>
+  mutate(
+    log10_conc = log10(conc_adjusted),
+    probit_mortality = qnorm(percent_mortality / 100) + 5
+  ) |>
+  filter(!is.infinite(probit_mortality) & !is.na(probit_mortality))
+
+# 2. Calculate the transformed summary averages
+nauplii_probit_summary <- nauplii_transformed |>
+  group_by(treatment, log10_conc) |>
+  summarise(
+    mean_probit = mean(probit_mortality, na.rm = TRUE),
+    se_probit = sd(probit_mortality, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+# 3. Plot with cross-intersecting internal axes
+ggplot(nauplii_probit_summary, aes(x = log10_conc, y = mean_probit, color = treatment)) +
+  # FIXED: Draws a solid black baseline across the panels at y = 4 (or change to 3 for absolute bottom)
+  #geom_hline(yintercept = 4, color = "black", linewidth = 0.5) +
+  # FIXED: Draws a solid black vertical axis line exactly at x = 0
+  #geom_vline(xintercept = 0, color = "black", linewidth = 0.5) +
+  
+  geom_point(size = 3) + 
+  geom_errorbar(
+    aes(ymin = mean_probit - se_probit, ymax = mean_probit + se_probit),
+    width = 0.05, alpha = 0.6
+  ) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1, linetype = "dashed") + 
+  
+  ggpubr::stat_regline_equation(
+    aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~")),
+    label.x = -1.8, 
+    label.y = 6.7,  
+    size = 3.5,
+    show.legend = FALSE
+  ) +
+  
+  facet_wrap(~ treatment) + 
+  scale_x_continuous(limits = c(-2, 4), breaks = seq(-2, 4, by = 1)) +
+  labs(
+    x = "Log10 Concentration [log10(µg/mL)]",
+    y = "Mortality (Probit Units)",
+    title = "Classical Probit Dose-Response Analysis"
+  ) +
+  scale_color_manual(values = c("Aged PS" = "#6BB389", "PS" = "#4D95BC", "Pure PS" = "#3276EC")) + 
+  theme_bw() +
+  coord_cartesian(ylim = c(3, 7)) + 
+  theme(
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "none",
+    # Keeps the outer box outline the clean, light grey of default theme_bw
+    panel.border = element_rect(color = "grey85", fill = NA, linewidth = 0.8),
+    axis.line = element_blank()
+  )
+```
+
+```{r}
+##probit analysis attempt without the control
+
+#| label: true-probit-scatterplot
+#| fig-width: 11
+#| fig-height: 5.0
+
+# 1. Apply true Probit and Log10 transformations
+nauplii_transformed <- data_plastic3mL |>
+  mutate(conc_adjusted = if_else(concentration_mg_m_l_avg == 0, 0.01, concentration_mg_m_l_avg)) |>
+  mutate(
+    log10_conc = log10(conc_adjusted),
+    probit_mortality = qnorm(percent_mortality / 100) + 5
+  ) |>
+  filter(!is.infinite(probit_mortality) & !is.na(probit_mortality))
+
+# 2. Calculate the transformed summary averages
+nauplii_probit_summary <- nauplii_transformed |>
+  group_by(treatment, log10_conc) |>
+  summarise(
+    mean_probit = mean(probit_mortality, na.rm = TRUE),
+    se_probit = sd(probit_mortality, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+# 3. Plot with cross-intersecting internal axes
+ggplot(nauplii_probit_summary, aes(x = log10_conc, y = mean_probit, color = treatment)) +
+  # FIXED: Draws a solid black baseline across the panels at y = 4 (or change to 3 for absolute bottom)
+  #geom_hline(yintercept = 4, color = "black", linewidth = 0.5) +
+  # FIXED: Draws a solid black vertical axis line exactly at x = 0
+  #geom_vline(xintercept = 0, color = "black", linewidth = 0.5) +
+  
+  geom_point(size = 3) + 
+  geom_errorbar(
+    aes(ymin = mean_probit - se_probit, ymax = mean_probit + se_probit),
+    width = 0.05, alpha = 0.6
+  ) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1, linetype = "dashed") + 
+  
+  ggpubr::stat_regline_equation(
+    aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~")),
+    label.x = -1.8, 
+    label.y = 6.7,  
+    size = 3.5,
+    show.legend = FALSE
+  ) +
+  
+  facet_wrap(~ treatment) + 
+  scale_x_continuous(limits = c(-2, 4), breaks = seq(-2, 4, by = 1)) +
+  labs(
+    x = "Log10 Concentration [log10(µg/mL)]",
+    y = "Mortality (Probit Units)",
+    title = "Classical Probit Dose-Response Analysis"
+  ) +
+  scale_color_manual(values = c("Aged PS" = "#6BB389", "PS" = "#4D95BC", "Pure PS" = "#3276EC")) + 
+  theme_bw() +
+  coord_cartesian(ylim = c(3, 7)) + 
+  theme(
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "none",
+    # Keeps the outer box outline the clean, light grey of default theme_bw
+    panel.border = element_rect(color = "grey85", fill = NA, linewidth = 0.8),
+    axis.line = element_blank()
+  )
+```
+
+```{r}
+
+#| label: probit-lc25-calculations
+
+# Fit the 4-parameter log-normal (probit) model split by treatment
+probit_model <- drm(
+  percent_mortality ~ concentration_mg_m_l_avg, 
+  curveid = treatment,
+  data = data_plastic3mL, 
+  fct = LN.4(names = c("Slope", "Lower Limit", "Upper Limit", "LC25"))
+)
+
+# 1. Print out the probit model summary
+summary(probit_model)
+
+# 2. Extract the new Probit-calculated LC25 values
+cat("\n--- Probit-Calculated LC25 Values per Treatment ---\n")
+ED(probit_model, 25)
+```
+
+```{r}
+
+#| label: particles-mL-bar-graph
+#| fig-width: 11
+#| fig-height: 5
+
+# 1. Summarize and clean up the concentration labels using particles/mL
+nauplii_summary3mL_particles <- data_plastic3mL |>
+  mutate(concentration_clean = factor(concentration_p_m_l_avg)) |> 
+  group_by(treatment, concentration_clean) |>
+  summarise(
+    mean_mortality = mean(percent_mortality, na.rm = TRUE),
+    se_mortality = sd(percent_mortality, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+# 2. Plot with free x-axes per panel
+ggplot(nauplii_summary3mL_particles, aes(x = concentration_clean, y = mean_mortality, fill = treatment)) +
+  geom_col(show.legend = FALSE, width = 0.7, color = "black", linewidth = 0.2) +  
+  geom_errorbar(
+    aes(ymin = mean_mortality - se_mortality, ymax = mean_mortality + se_mortality),
+    width = 0.2, color = "black"
+  ) +
+  facet_wrap(~ treatment, scales = "free_x") + 
+  labs(
+    x = "Concentration (particles/mL)",
+    y = "% Mortality",
+    title = "Nauplii Mortality across Plastic Treatments (particles/mL)"
+  ) +
+  scale_fill_manual(values = c("Aged PS" = "#6BB389", "PS" = "#4D95BC", "Pure PS" = "#3276EC")) + 
+  theme_bw() + 
+  coord_cartesian(ylim = c(0, 100)) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+    strip.text = element_text(face = "bold", size = 11), 
+    panel.grid.major.x = element_blank() 
+  )
+
+```
+
+```{r}
+
+#| label: probit-scatterplot-particles
+#| fig-width: 11
+#| fig-height: 5.0
+
+# 1. Apply true Probit and Log10 transformations for particles/mL
+nauplii_transformed_particles <- data_plastic3mL |>
+  mutate(conc_adjusted = if_else(concentration_p_m_l_avg == 0, 1, concentration_p_m_l_avg)) |>
+  mutate(
+    log10_conc = log10(conc_adjusted),
+    probit_mortality = qnorm(percent_mortality / 100) + 5
+  ) |>
+  filter(!is.infinite(probit_mortality) & !is.na(probit_mortality))
+
+# 2. Calculate the transformed summary averages
+nauplii_probit_summary_particles <- nauplii_transformed_particles |>
+  group_by(treatment, log10_conc) |>
+  summarise(
+    mean_probit = mean(probit_mortality, na.rm = TRUE),
+    se_probit = sd(probit_mortality, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  )
+
+# 3. Plot with cross-intersecting internal axes
+ggplot(nauplii_probit_summary_particles, aes(x = log10_conc, y = mean_probit, color = treatment)) +
+  geom_hline(yintercept = 4, color = "black", linewidth = 0.5) +
+  geom_vline(xintercept = 0, color = "black", linewidth = 0.5) +
+  
+  geom_point(size = 3) + 
+  geom_errorbar(
+    aes(ymin = mean_probit - se_probit, ymax = mean_probit + se_probit),
+    width = 0.05, alpha = 0.6
+  ) +
+  geom_smooth(method = "lm", se = FALSE, linewidth = 1, linetype = "dashed") + 
+  
+  ggpubr::stat_regline_equation(
+    aes(label = paste(..eq.label.., ..rr.label.., sep = "~~~~")),
+    label.x = 1.0, 
+    label.y = 6.7,  
+    size = 3.5,
+    show.legend = FALSE
+  ) +
+  
+  facet_wrap(~ treatment) + 
+  scale_x_continuous(limits = c(0, 8), breaks = seq(0, 8, by = 1)) +
+  labs(
+    x = "Log10 Concentration [log10(particles/mL)]",
+    y = "Mortality (Probit Units)",
+    title = "Classical Probit Dose-Response Analysis (particles/mL)"
+  ) +
+  scale_color_manual(values = c("Aged PS" = "#6BB389", "PS" = "#4D95BC", "Pure Pure PS" = "#3276EC", "Pure PS" = "#3276EC")) + 
+  theme_bw() +
+  coord_cartesian(ylim = c(3, 7)) + 
+  theme(
+    strip.text = element_text(face = "bold", size = 11),
+    legend.position = "none",
+    panel.border = element_rect(color = "grey85", fill = NA, linewidth = 0.8),
+    axis.line = element_blank()
+  )
+```
+
+```{r}
+
+```
+
+```{r}
+
+#| label: probit-lc25-calculations-particles
+
+# Fit the 4-parameter log-normal (probit) model split by treatment using particles/mL
+probit_model_particles <- drm(
+  percent_mortality ~ concentration_p_m_l_avg, 
+  curveid = treatment,
+  data = data_plastic3mL, 
+  fct = LN.4(names = c("Slope", "Lower Limit", "Upper Limit", "LC25"))
+)
+
+# 1. Print out the probit model summary
+summary(probit_model_particles)
+
+# 2. Extract the new Probit-calculated LC25 values
+cat("\n--- Probit-Calculated LC25 Values per Treatment (particles/mL) ---\n")
+ED(probit_model_particles, 25)
+```
